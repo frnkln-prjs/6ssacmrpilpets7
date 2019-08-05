@@ -8,7 +8,7 @@
 
 usage() {
     echo -e "
-    Usage: `basename $0` [-s|-d] [-f inputfile]\n
+    Usage: `basename $0` [-s|-d] <-f inputfile>\n
     where:
         -s        = add usrs with superuser privilege
         -d        = delete the users
