@@ -1,0 +1,175 @@
+#!/bin/bash
+
+#Designed to run on the following Linux releases (cat /etc/system-release):
+# Amazon Linux release 2 (Karoo)
+# Amazon Linux AMI release 2018.03
+
+# Must run as root
+
+usage() {
+    echo -e "
+    Usage: `basename $0` [-s|-d] [-f inputfile]\n
+    where:
+        -s        = add usrs with superuser privilege
+        -d        = delete the users
+        inputfile = list of usernames
+    "
+    exit ${1}
+}
+
+logmsg() {
+    msg="${@}"
+    #echo "${msg}"
+    echo -e "$(date '+%Y%m%d-%H%M%S') : ${msg}" | tee -a ${logfile};
+}
+
+doexit() {
+    excd=$1; shift
+    logmsg "${@}"
+    case $excd in
+        0) return 0 ;;
+        *) exit ${excd} ;;
+    esac
+}
+
+trapexit() {
+    doexit 2 "trap: Script encountered interruption"
+}
+
+enablePWAuth() {
+    sshdir=/etc/ssh
+    sshdfile=${sshdir}/sshd_config
+    bakpfile=${sshdfile}.orig
+
+    keyw=PasswordAuthentication
+    grep "^${keyw} no" $sshdfile > /dev/null 2>&1
+    [ $? -eq 0 ] && cp -p $sshdfile $bakpfile
+    [ ! -e $bakpfile ] && cp -p $sshdfile $bakpfile
+    sed -i "s/^\(${keyw}\) no/\1 yes/" $sshdfile && logmsg "Password Autentication is enabled"
+
+}
+
+createDir() {
+    uu_=$1 && shift
+    mkdir -p ${@} && chown -R ${uu_}:${uu_} ${@} 2> /dev/null && logmsg "Dir created: $@"
+    [ "$uu_" == "root" ] && chmod a+rwx,o+t ${@} 2> /dev/null
+}
+
+createUser() {
+
+    useradd "${1}" 2> /dev/null
+    if [ $? -eq 0 ]; then
+        logmsg "User '${1}' is created"
+        pp_=`head /dev/urandom | tr -dc A-Za-z0-9 | head -c 12`
+        ( echo "$pp_" | passwd --stdin ${1} ) && echo "${1},${pp_}" >> ${PASSWDFILE}
+        saveKey ${1}
+    fi
+    #success if user exists
+    id "${1}" > /dev/null 2>&1 && return 0
+    # else exit as failed
+    return 1
+
+} # end of createUser
+
+saveKey() {
+
+    uu_=$1
+    eval qq_=~${uu_}
+    rootfile=${uu_}.pem
+    pemfile=${qq_}/.ssh/${rootfile}
+    [ $? -eq 0 ] && createDir ${uu_} ${qq_}/.ssh
+
+    ssh-keygen -P '' -f ${pemfile} && logmsg "keyfile generated: ${rootfile}"
+    chown ${uu_}:${uu_} ${pemfile}
+    if [ -f ${pemfile}.pub ]; then
+        cat ${pemfile}.pub >> ${qq_}/.ssh/authorized_keys
+    else
+        ssh-keygen -y -f ${pemfile} >> ${qq_}/.ssh/authorized_keys
+    fi
+    logmsg "pub key saved: `cat ${qq_}/.ssh/authorized_keys`"
+
+    [ -e /tmp/bootcamp ] && cp -p ${pemfile} /tmp/bootcamp 2> /dev/null && \
+        chown ${uu_}:${uu_} /tmp/bootcamp/${rootfile} && \
+        logmsg "keyfile backup:\n$(ls -l /tmp/bootcamp/${rootfile})"
+
+} # end of saveKey
+
+createUsers() {
+
+    grep -v "^#" ${1} 2> /dev/null | while read uu_; do
+        sudousr=${sudofile}-${uu_}
+        case "-${2}" in
+            -d) # delete the user
+                userdel -r ${uu_} 2> /dev/null && \
+                    rm -fr ${sudousr} 2> /dev/null && \
+                    logmsg "User '${uu_}' is deleted"
+                ;;
+            *)  # created user only
+                createUser ${uu_}
+                # add sudo privilege, if option is set
+                if [ $? -eq 0 -a "${2}" = "s" ]; then
+                    usermod -a -G wheel ${uu_} && \
+                        echo -e "# User rules for ${uu_} user\n${uu_} ALL=(ALL) NOPASSWD:ALL" > ${sudousr} && \
+                        chmod 440 ${sudousr} && \
+                        logmsg "sudo access granted for ${uu_}...\n$(ls -l ${sudousr})"
+
+                fi
+                ;;
+        esac
+    done
+
+}
+
+##############################################
+#MAIN BODY
+##############################################
+
+[ "`whoami`" != "root" ] && echo "ERROR!! Must run as root!!" && exit 1
+
+SUDODIR=/etc/sudoers.d
+logfile=/tmp/`basename ${0}`-`date '+%Y%m%d%H%M%S'`.log
+sudofile=${SUDODIR}/99-bootcamp
+PASSWDFILE=bootcamp.config.`date '+%Y%m%d%H%M%S'`
+USERS='
+testuser
+unixrox
+'
+
+[ ! -d ${SUDODIR} ] && echo "ERROR!! Unable to find ${SUDODIR}" && exit 1
+
+# datafile = ~/misc/users.txt
+# this location also includes the public and private keys
+datafile=
+opt=
+
+while getopts "f:ds" o; do
+    case "$o" in
+        d|s)  
+            # d - delete users in the list 
+            # s - create users with superuser privilege
+            opt="$o"
+        ;;
+        f)  # an input file is added; this overrides the USERS and ADMINS values
+            datafile=${OPTARG}
+        ;;
+        *)   # this must be the datafile argument
+            usage 1
+        ;;
+    esac
+done
+
+if [ -z "$datafile" ]; then
+    datafile=/tmp/.`basename $0`-datafile.tmp
+    echo "$USERS" > $datafile
+fi
+
+trap trapexit 1 2
+
+if [ "${opt}" != "d" ]; then
+    enablePWAuth
+    createDir `whoami` /tmp/bootcamp /tmp/reports
+fi
+
+createUsers ${datafile} ${opt}
+
+[ -e $PASSWDFILE ] && echo -e "\n===========\n\nCheck out the list of users and their password in $PASSWDFILE\n\n===========\n"
