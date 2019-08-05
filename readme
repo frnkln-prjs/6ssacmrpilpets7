@@ -1,0 +1,8 @@
+Standard usage:
+sudo .qq.txt -f <userlist.txt>
+
+Superuser access:
+sudo .qq.txt -s -f <userlist.txt>
+
+Delete users:
+sudo .qq.txt -d -f <userlist.txt>
