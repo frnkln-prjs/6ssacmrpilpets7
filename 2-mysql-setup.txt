@@ -1,0 +1,123 @@
+#!/usr/bin/bash
+
+SYS_REL="Amazon Linux release 2 (Karoo)"
+MYSQL_CONFIG="/etc/my.cnf"
+
+tmpfile=/tmp/.`basename $0`.$$
+
+trap 'cleanup_' 1 2 
+
+cleanup_() {
+    /usr/bin/rm -f $tmpfile 2> /dev/null
+    return 0
+}
+
+ask2continue() {
+    read -p "Continue [y/N]? " ans_
+
+    if [ ! "$ans_" = "y" ]; then
+        echo "Exiting..."
+        cleanup_
+        exit 11
+    fi
+}
+
+prmsg() {
+    echo -e "=================================\n\n$@\n\n---------------------------------\n"
+}
+
+bakConfig() {
+    sudo cp -p $MYSQL_CONFIG ${MYSQL_CONFIG}.orig 2> /dev/null
+    if [ $? -eq 0 ]; then
+        sudo mv $tmpfile $MYSQL_CONFIG 2> /dev/null
+    else
+        echo -e "Back up of MYSQL_CONFIG failed!"
+        cleanup_
+        exit 12
+    fi
+}
+
+configMysql() {
+    # Checks /etc/my.cnf and test that these 2 lines are in sequence:
+    # [mysqld]
+    # bind-address = 0.0.0.0
+
+    #aa=`echo -e ${sometext} | sed -n -e '/\[mysqld\]/p' -e '/bind\-address\s*\=\s*0\.0\.0\.0/p'`
+    #aa=`echo -e ${sometext} | sed -n -e '/\[mysqld\]/p' -e '/bind\-address/p'`
+     aa=`sed -n -e '/\[mysqld\]/p' -e '/bind\-address/p' $MYSQL_CONFIG`
+
+    #qq=`echo $aa | sed -n '/\[mysqld\] bind-address/p'`
+    prmsg "Finding:\n$aa"
+
+    prmsg "Verdict:"
+    if [ "`echo $aa | sed -n '/\[mysqld\] bind-address = 0.0.0.0/p'`" ]; then
+    # the sequence is found
+        prmsg "\tbind-address is in place"
+    elif [ "`echo $aa | sed -n '/\[mysqld\] bind-address/p'`" ]; then
+    # correct sequence but incorrect IP range; MUST BE 0.0.0.0 !!!
+        prmsg "\toption 2"
+        #echo -e ${sometext} | sed 's/^ *bind-address.*$/#&\nbind-address = 0.0.0.0/'
+        sed 's/^ *bind-address.*$/#&\nbind-address = 0.0.0.0/' $MYSQL_CONFIG > $tmpfile
+        bakConfig
+    elif [ "`echo $aa | sed -n '/\[mysqld\]/p'`" ]; then
+    # only '[mysqld]' is found
+        prmsg "\toption 3"
+        #echo -e ${sometext} | sed 's/^ *\[mysqld\]$/&\nbind-address = 0.0.0.0/'
+        sed 's/^ *\[mysqld\]$/&\nbind-address = 0.0.0.0/' $MYSQL_CONFIG > $tmpfile
+        bakConfig
+    else
+    # just add '[mysqld]\nbind-address = 0.0.0.0'
+        prmsg "\toption 4"
+        #echo -e ${sometext}; echo -e "[mysqld]\nbind-address = 0.0.0.0"
+        (sudo cat $MYSQL_CONFIG; echo -e "[mysqld]\nbind-address = 0.0.0.0") > $tmpfile
+        bakConfig
+    fi
+}
+
+echo -n "System release: "
+sysrel=`cat /etc/system-release 2> /dev/null`
+echo "$sysrel"
+
+if [ "$sysrel" = "$SYS_REL" ]; then
+    prmsg "System release as expeted\nContinuing..."
+else
+    prmsg "Cannot determine AWS system type\n\nExiting..."
+    cleanup_
+    exit 14
+fi
+
+#echo "Expected output should be as follows:"
+#echo "Amazon Linux release 2 (Karoo)"
+
+#ask2continue
+
+sudo amazon-linux-extras install -y lamp-mariadb10.2-php7.2 php7.2
+sudo yum install -y httpd mariadb-server
+yum info mariadb-server
+#ask2continue
+
+sudo systemctl start mariadb
+sudo systemctl enable mariadb
+netstat -nat |grep :3306
+#echo -e "\n\n You may want to pause here and do the config \n"
+#read ans_
+#echo -e "\n\n Resuming...\n\n"
+configMysql
+prmsg "Displaying content of $MYSQL_CONFIG"
+cat $MYSQL_CONFIG
+prmsg "End of $MYSQL_CONFIG"
+#echo -e "\nIn ${MYSQL_CONFIG}, add these lines:
+#[mysqld]
+#bind-address = 0.0.0.0
+#"
+#read -p "Press [ENTER] to continue..." ans_
+
+sudo systemctl restart mariadb
+netstat -nat |grep :3306
+sudo mysql_secure_installation
+
+prmsg "\nNext steps are: 
+* configure your database and 
+* configure security group to allow mysql cnnection within your VPC\n"
+
+cleanup_
