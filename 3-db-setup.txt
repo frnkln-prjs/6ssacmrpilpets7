@@ -1,0 +1,103 @@
+#!/usr/bin/bash
+
+#mysql -u'dummyuser' -p'dummypassword' -h'dummyhost'
+dbhost=localhost
+dbname=bootcamp
+dbuser=root
+dbpswd="dummypassword"
+tbname="empinfo"
+tmpfile=/tmp/.`basename ${0%.sh}.tmp.sql.$$`
+delfile=/tmp/.`basename ${0%.sh}.del.sql.$$`
+datafile=
+
+if [ $# -gt 0 ]; then
+    [ ! -f "${1}" ] && (
+        echo -e "\nFile not found: ${1}.\nExiting...\n"
+        exit 1
+    )
+    datafile=$1
+else
+    echo -e "\nNo data file provided.\nContinuing...\n"
+fi
+
+trap "deltmpfiles" 1 2
+
+deltmpfiles() {
+    rm $delfile $tmpfile > /dev/null 2>&1
+}
+
+touch $tmpfile $delfile
+chmod go-rwx $tmpfile $delfile
+
+echo "
+Create database IF NOT EXISTS ${dbname};
+use ${dbname};
+
+CREATE USER IF NOT EXISTS 'unixrox'@'%' IDENTIFIED BY 'Tes!user01';
+GRANT ALL PRIVILEGES ON * . * TO 'unixrox'@'%' with grant option;
+
+DROP TABLE IF EXISTS ${tbname};
+
+create table ${tbname} ( 
+	id INT(4) AUTO_INCREMENT PRIMARY KEY, 
+	first VARCHAR(30) NOT NULL, 
+	last VARCHAR(30) NOT NULL, 
+	empid INT(5) NOT NULL, 
+	age int(4) not null, 
+	city varchar(25) not null, 
+	state varchar(25) not null
+);
+
+insert into ${tbname}
+(first, last, empid, age, city, state)
+values
+('John','Jones',99980,45,'Payson','Arizona'),
+('Mary','Jones',99982,25,'Payson','Arizona'),
+('Eric','Edwards',88232,32,'San Diego','California'),
+('Mary Ann','Edwards',88233,32,'Phoenix','Arizona'),
+('Ginger','Howell',98002,42,'Cottonwood','Arizona'),
+('Sebastian','Smith',92001,23,'Gila Bend','Arizona'),
+('Gus','Gray',22322,35,'Bagdad','Arizona'),
+('Mary Ann','May',32326,52,'Tucson','Arizona'),
+('Erica','Williams',32327,60,'Show Low','Arizona'),
+('Leroy','Brown',32380,22,'Pinetop','Arizona'),
+('Elroy','Cleaver',32382,22,'Globe','Arizona');
+    " > $tmpfile
+
+# ${datafile} should at least have the following fields:
+# #userID,User Description,password
+# bootcamp,Test account,testUser01
+
+
+[ -r "${datafile}" ] && ( cat ${datafile} 2> /dev/null | while read ff; do
+    echo $ff | grep -v "^#" > /dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        mm=`echo $ff | awk -F"," '{print $5}'`
+        uu=`echo $ff | awk -F"," '{print $1}' | tr '.' '_'`
+        pp=`echo $ff | awk -F"," '{print $3}'`
+        echo "DROP USER IF EXISTS '${uu}'@'%';" >> $tmpfile
+        echo "DROP TABLE IF EXISTS ${uu}_tbl;" >> $tmpfile
+        echo "
+CREATE USER IF NOT EXISTS '${uu}'@'%' IDENTIFIED BY '${pp}';
+CREATE TABLE ${uu}_tbl(
+    id INT(2) AUTO_INCREMENT PRIMARY KEY,
+    firstname VARCHAR(30) NOT NULL,
+    lastname VARCHAR(30) NOT NULL,
+    email VARCHAR(50)
+    );
+INSERT INTO ${uu}_tbl (firstname, lastname, email)
+    values ('${uu}','bootcamper','${uu}@abccompany.com');
+GRANT ALL PRIVILEGES ON bootcamp . ${uu}_tbl TO '${uu}'@'%' with grant option;
+GRANT ALL PRIVILEGES ON test . *             TO '${uu}'@'%' with grant option;
+GRANT ALL PRIVILEGES ON * . *                TO '${uu}'@'%';
+" >> $tmpfile
+    fi
+done )
+
+echo "FLUSH PRIVILEGES;" >> $tmpfile
+
+mysql -u${dbuser} -p${dbpswd} -h${dbhost} < $tmpfile
+
+deltmpfiles
+
+echo "user and table setup completed.  Exiting..."
